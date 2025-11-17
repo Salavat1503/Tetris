@@ -1,0 +1,623 @@
+import pygame
+import random
+import sys
+from pygame import mixer
+
+# Инициализация Pygame
+pygame.init()
+mixer.init()
+
+# Константы
+SCREEN_WIDTH = 800
+SCREEN_HEIGHT = 700
+GRID_SIZE = 30
+GRID_WIDTH = 10
+GRID_HEIGHT = 20
+SIDEBAR_WIDTH = 200
+
+# Расчет позиций
+GRID_OFFSET_X = (SCREEN_WIDTH - SIDEBAR_WIDTH - GRID_WIDTH * GRID_SIZE) // 2
+GRID_OFFSET_Y = (SCREEN_HEIGHT - GRID_HEIGHT * GRID_SIZE) // 2
+
+# Цвета
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+GRAY = (128, 128, 128)
+DARK_GRAY = (50, 50, 50)
+LIGHT_BLUE = (100, 100, 255)
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+BLUE = (0, 0, 255)
+CYAN = (0, 255, 255)
+MAGENTA = (255, 0, 255)
+YELLOW = (255, 255, 0)
+ORANGE = (255, 165, 0)
+
+# Цвета фигур
+COLORS = [CYAN, BLUE, ORANGE, YELLOW, GREEN, MAGENTA, RED]
+
+# Фигуры тетрамино
+SHAPES = [
+    [[1, 1, 1, 1]],  # I
+    [[1, 0, 0], [1, 1, 1]],  # J
+    [[0, 0, 1], [1, 1, 1]],  # L
+    [[1, 1], [1, 1]],  # O
+    [[0, 1, 1], [1, 1, 0]],  # S
+    [[0, 1, 0], [1, 1, 1]],  # T
+    [[1, 1, 0], [0, 1, 1]]  # Z
+]
+
+# Настройки сложности
+DIFFICULTY_SETTINGS = {
+    "Легкая": {
+        "initial_speed": 800,
+        "speed_increment": 30,
+        "level_up_lines": 15
+    },
+    "Средняя": {
+        "initial_speed": 500,
+        "speed_increment": 50,
+        "level_up_lines": 10
+    },
+    "Сложная": {
+        "initial_speed": 300,
+        "speed_increment": 70,
+        "level_up_lines": 8
+    },
+    "Эксперт": {
+        "initial_speed": 150,
+        "speed_increment": 100,
+        "level_up_lines": 5
+    }
+}
+
+
+class Button:
+    def __init__(self, x, y, width, height, text, color, hover_color, text_color=WHITE):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.text = text
+        self.color = color
+        self.hover_color = hover_color
+        self.text_color = text_color
+        self.is_hovered = False
+        self.font = pygame.font.Font(None, 36)
+
+    def draw(self, screen):
+        color = self.hover_color if self.is_hovered else self.color
+        pygame.draw.rect(screen, color, self.rect, border_radius=10)
+        pygame.draw.rect(screen, WHITE, self.rect, 2, border_radius=10)
+
+        text_surface = self.font.render(self.text, True, self.text_color)
+        text_rect = text_surface.get_rect(center=self.rect.center)
+        screen.blit(text_surface, text_rect)
+
+    def check_hover(self, pos):
+        self.is_hovered = self.rect.collidepoint(pos)
+        return self.is_hovered
+
+    def is_clicked(self, pos, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            return self.rect.collidepoint(pos)
+        return False
+
+
+class Tetromino:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.shape_index = random.randint(0, len(SHAPES) - 1)
+        self.shape = SHAPES[self.shape_index]
+        self.color = COLORS[self.shape_index]
+        self.rotation = 0
+
+    def rotate(self):
+        # Транспонирование матрицы для поворота на 90 градусов
+        rows = len(self.shape)
+        cols = len(self.shape[0])
+        rotated = [[0 for _ in range(rows)] for _ in range(cols)]
+
+        for r in range(rows):
+            for c in range(cols):
+                rotated[c][rows - 1 - r] = self.shape[r][c]
+
+        return rotated
+
+    def get_cells(self):
+        """Возвращает координаты всех клеток фигуры"""
+        cells = []
+        for y, row in enumerate(self.shape):
+            for x, cell in enumerate(row):
+                if cell:
+                    cells.append((self.x + x, self.y + y))
+        return cells
+
+
+class Grid:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        """Очищает игровое поле"""
+        self.cells = [[0 for _ in range(GRID_WIDTH)] for _ in range(GRID_HEIGHT)]
+
+    def is_cell_inside(self, x, y):
+        """Проверяет, находится ли клетка в пределах поля"""
+        return 0 <= x < GRID_WIDTH and 0 <= y < GRID_HEIGHT
+
+    def is_collision(self, tetromino):
+        """Проверяет столкновение фигуры с границами или другими фигурами"""
+        for x, y in tetromino.get_cells():
+            if not self.is_cell_inside(x, y) or (y >= 0 and self.cells[y][x]):
+                return True
+        return False
+
+    def place_tetromino(self, tetromino):
+        """Размещает фигуру на поле"""
+        for x, y in tetromino.get_cells():
+            if y >= 0:  # Игнорируем клетки выше поля
+                self.cells[y][x] = tetromino.color
+
+    def is_row_full(self, row):
+        """Проверяет, заполнена ли строка"""
+        return all(cell != 0 for cell in self.cells[row])
+
+    def clear_row(self, row):
+        """Очищает указанную строку"""
+        del self.cells[row]
+        self.cells.insert(0, [0 for _ in range(GRID_WIDTH)])
+
+    def clear_full_rows(self):
+        """Очищает все заполненные строки и возвращает их количество"""
+        full_rows = 0
+        for row in range(GRID_HEIGHT - 1, -1, -1):
+            if self.is_row_full(row):
+                self.clear_row(row)
+                full_rows += 1
+        return full_rows
+
+
+class Game:
+    def __init__(self):
+        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        pygame.display.set_caption("Тетрис")
+        self.clock = pygame.time.Clock()
+        self.font = pygame.font.Font(None, 36)
+        self.small_font = pygame.font.Font(None, 24)
+        self.title_font = pygame.font.Font(None, 72)
+
+        # Состояния игры
+        self.state = "menu"  # menu, difficulty, playing, paused, game_over
+        self.difficulty = "Средняя"
+
+        # Инициализация игровых объектов
+        self.reset()
+
+        # Создание кнопок меню
+        self.create_menu_buttons()
+
+        # Настройка таймеров
+        self.fall_time = 0
+
+        # Загрузка звуков
+        try:
+            self.clear_sound = mixer.Sound("clear.wav") if hasattr(mixer, 'Sound') else None
+        except:
+            self.clear_sound = None
+
+    def create_menu_buttons(self):
+        button_width = 300
+        button_height = 60
+        center_x = SCREEN_WIDTH // 2 - button_width // 2
+
+        self.menu_buttons = [
+            Button(center_x, 250, button_width, button_height, "Начать игру", BLUE, LIGHT_BLUE),
+            Button(center_x, 330, button_width, button_height, "Выбор сложности", BLUE, LIGHT_BLUE),
+            Button(center_x, 410, button_width, button_height, "Выход", RED, (255, 100, 100))
+        ]
+
+        self.difficulty_buttons = [
+            Button(center_x, 200, button_width, button_height, "Легкая", GREEN, (100, 255, 100)),
+            Button(center_x, 280, button_width, button_height, "Средняя", BLUE, LIGHT_BLUE),
+            Button(center_x, 360, button_width, button_height, "Сложная", ORANGE, (255, 200, 100)),
+            Button(center_x, 440, button_width, button_height, "Эксперт", RED, (255, 100, 100)),
+            Button(center_x, 520, button_width, button_height, "Назад", GRAY, (200, 200, 200))
+        ]
+
+    def reset(self):
+        """Сбрасывает состояние игры"""
+        self.grid = Grid()
+        self.current_tetromino = self.create_new_tetromino()
+        self.next_tetromino = self.create_new_tetromino()
+        self.game_over = False
+        self.paused = False
+        self.score = 0
+        self.level = 1
+        self.lines_cleared = 0
+
+        # Установка скорости в зависимости от сложности
+        settings = DIFFICULTY_SETTINGS[self.difficulty]
+        self.fall_speed = settings["initial_speed"]
+        self.speed_increment = settings["speed_increment"]
+        self.level_up_lines = settings["level_up_lines"]
+
+    def create_new_tetromino(self):
+        """Создает новую фигуру в верхней части поля"""
+        return Tetromino(GRID_WIDTH // 2 - 1, 0)
+
+    def handle_menu_events(self):
+        """Обрабатывает события в меню"""
+        mouse_pos = pygame.mouse.get_pos()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    pygame.quit()
+                    sys.exit()
+
+            # Проверка нажатия кнопок меню
+            for button in self.menu_buttons:
+                button.check_hover(mouse_pos)
+                if button.is_clicked(mouse_pos, event):
+                    if button.text == "Начать игру":
+                        self.state = "playing"
+                        self.reset()
+                    elif button.text == "Выбор сложности":
+                        self.state = "difficulty"
+                    elif button.text == "Выход":
+                        pygame.quit()
+                        sys.exit()
+
+    def handle_difficulty_events(self):
+        """Обрабатывает события в меню выбора сложности"""
+        mouse_pos = pygame.mouse.get_pos()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self.state = "menu"
+
+            # Проверка нажатия кнопок выбора сложности
+            for button in self.difficulty_buttons:
+                button.check_hover(mouse_pos)
+                if button.is_clicked(mouse_pos, event):
+                    if button.text in ["Легкая", "Средняя", "Сложная", "Эксперт"]:
+                        self.difficulty = button.text
+                        self.state = "menu"
+                    elif button.text == "Назад":
+                        self.state = "menu"
+
+    def handle_game_events(self):
+        """Обрабатывает события во время игры"""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self.state = "menu"
+
+                if event.key == pygame.K_p:
+                    self.paused = not self.paused
+
+                if event.key == pygame.K_r and self.game_over:
+                    self.reset()
+
+                if not self.paused and not self.game_over:
+                    if event.key == pygame.K_LEFT:
+                        self.move(-1, 0)
+                    elif event.key == pygame.K_RIGHT:
+                        self.move(1, 0)
+                    elif event.key == pygame.K_DOWN:
+                        self.move(0, 1)
+                    elif event.key == pygame.K_UP:
+                        self.rotate_tetromino()
+                    elif event.key == pygame.K_SPACE:
+                        self.hard_drop()
+
+    def move(self, dx, dy):
+        """Перемещает текущую фигуру"""
+        self.current_tetromino.x += dx
+        self.current_tetromino.y += dy
+
+        if self.grid.is_collision(self.current_tetromino):
+            # Откат движения при столкновении
+            self.current_tetromino.x -= dx
+            self.current_tetromino.y -= dy
+
+            # Если движение было вниз, фиксируем фигуру
+            if dy > 0:
+                self.lock_tetromino()
+                return True
+        return False
+
+    def rotate_tetromino(self):
+        """Поворачивает текущую фигуру"""
+        original_shape = self.current_tetromino.shape
+        self.current_tetromino.shape = self.current_tetromino.rotate()
+
+        if self.grid.is_collision(self.current_tetromino):
+            # Попытка коррекции позиции при повороте у стен
+            for dx in [-1, 1, -2, 2]:
+                self.current_tetromino.x += dx
+                if not self.grid.is_collision(self.current_tetromino):
+                    return
+                self.current_tetromino.x -= dx
+
+            # Если коррекция не помогла, откат поворота
+            self.current_tetromino.shape = original_shape
+
+    def hard_drop(self):
+        """Мгновенное падение фигуры"""
+        while not self.move(0, 1):
+            pass
+
+    def lock_tetromino(self):
+        """Фиксирует фигуру на поле и создает новую"""
+        self.grid.place_tetromino(self.current_tetromino)
+
+        # Проверка и очистка заполненных строк
+        lines = self.grid.clear_full_rows()
+        if lines > 0:
+            self.add_score(lines)
+            if self.clear_sound:
+                self.clear_sound.play()
+
+        # Создание новой фигуры
+        self.current_tetromino = self.next_tetromino
+        self.next_tetromino = self.create_new_tetromino()
+
+        # Проверка на завершение игры
+        if self.grid.is_collision(self.current_tetromino):
+            self.game_over = True
+
+    def add_score(self, lines):
+        """Добавляет очки за очищенные линии"""
+        line_scores = {1: 100, 2: 300, 3: 500, 4: 800}
+        self.score += line_scores.get(lines, 0) * self.level
+        self.lines_cleared += lines
+
+        # Обновление уровня и скорости
+        new_level = self.lines_cleared // self.level_up_lines + 1
+        if new_level > self.level:
+            self.level = new_level
+            self.fall_speed = max(50, DIFFICULTY_SETTINGS[self.difficulty]["initial_speed"] -
+                                  (self.level - 1) * self.speed_increment)
+
+    def update(self):
+        """Обновляет игровое состояние"""
+        if self.paused or self.game_over or self.state != "playing":
+            return
+
+        current_time = pygame.time.get_ticks()
+
+        # Автоматическое падение
+        if current_time - self.fall_time > self.fall_speed:
+            self.move(0, 1)
+            self.fall_time = current_time
+
+    def draw_menu(self):
+        """Отрисовывает главное меню"""
+        self.screen.fill(BLACK)
+
+        # Заголовок
+        title_text = self.title_font.render("ТЕТРИС", True, CYAN)
+        title_rect = title_text.get_rect(center=(SCREEN_WIDTH // 2, 150))
+        self.screen.blit(title_text, title_rect)
+
+        # Текущая сложность
+        difficulty_text = self.font.render(f"Сложность: {self.difficulty}", True, WHITE)
+        difficulty_rect = difficulty_text.get_rect(center=(SCREEN_WIDTH // 2, 200))
+        self.screen.blit(difficulty_text, difficulty_rect)
+
+        # Кнопки
+        for button in self.menu_buttons:
+            button.draw(self.screen)
+
+        # Управление
+        controls_y = 500
+        controls = [
+            "Управление в игре:",
+            "← → - Движение",
+            "↑ - Поворот",
+            "↓ - Ускорить",
+            "Пробел - Сбросить",
+            "P - Пауза",
+            "ESC - Выход в меню"
+        ]
+
+        for i, text in enumerate(controls):
+            control_text = self.small_font.render(text, True, WHITE)
+            control_rect = control_text.get_rect(center=(SCREEN_WIDTH // 2, controls_y + i * 25))
+            self.screen.blit(control_text, control_rect)
+
+    def draw_difficulty_menu(self):
+        """Отрисовывает меню выбора сложности"""
+        self.screen.fill(BLACK)
+
+        # Заголовок
+        title_text = self.title_font.render("ВЫБОР СЛОЖНОСТИ", True, CYAN)
+        title_rect = title_text.get_rect(center=(SCREEN_WIDTH // 2, 100))
+        self.screen.blit(title_text, title_rect)
+
+        # Текущая сложность
+        current_text = self.font.render(f"Текущая: {self.difficulty}", True, YELLOW)
+        current_rect = current_text.get_rect(center=(SCREEN_WIDTH // 2, 150))
+        self.screen.blit(current_text, current_rect)
+
+        # Описания сложностей
+        descriptions_y = 600
+        descriptions = [
+            "Легкая: Медленная скорость, больше линий для перехода на следующий уровень",
+            "Средняя: Стандартная скорость и прогрессия",
+            "Сложная: Быстрая скорость, меньше линий для перехода на уровень",
+            "Эксперт: Максимальная скорость, очень быстрая прогрессия"
+        ]
+
+        for i, text in enumerate(descriptions):
+            desc_text = self.small_font.render(text, True, WHITE)
+            desc_rect = desc_text.get_rect(center=(SCREEN_WIDTH // 2, descriptions_y + i * 25))
+            self.screen.blit(desc_text, desc_rect)
+
+        # Кнопки
+        for button in self.difficulty_buttons:
+            button.draw(self.screen)
+
+    def draw_game(self):
+        """Отрисовывает игровое поле и интерфейс"""
+        self.screen.fill(BLACK)
+
+        # Рисуем игровое поле
+        self.draw_grid()
+
+        # Рисуем текущую фигуру
+        self.draw_tetromino(self.current_tetromino)
+
+        # Рисуем следующую фигуру
+        self.draw_next_tetromino()
+
+        # Рисуем интерфейс
+        self.draw_ui()
+
+        # Сообщения о паузе и game over
+        if self.paused:
+            self.draw_centered_text("ПАУЗА", 48, WHITE)
+        elif self.game_over:
+            self.draw_centered_text("ИГРА ОКОНЧЕНА", 48, RED)
+            self.draw_centered_text("Нажми R для рестарта", 36, WHITE, 50)
+            self.draw_centered_text("Нажми ESC для выхода в меню", 36, WHITE, 100)
+
+    def draw_grid(self):
+        """Отрисовывает игровую сетку"""
+        # Фон поля
+        pygame.draw.rect(self.screen, DARK_GRAY,
+                         (GRID_OFFSET_X, GRID_OFFSET_Y,
+                          GRID_WIDTH * GRID_SIZE, GRID_HEIGHT * GRID_SIZE))
+
+        # Сетка
+        for x in range(GRID_WIDTH + 1):
+            pygame.draw.line(self.screen, GRAY,
+                             (GRID_OFFSET_X + x * GRID_SIZE, GRID_OFFSET_Y),
+                             (GRID_OFFSET_X + x * GRID_SIZE, GRID_OFFSET_Y + GRID_HEIGHT * GRID_SIZE))
+
+        for y in range(GRID_HEIGHT + 1):
+            pygame.draw.line(self.screen, GRAY,
+                             (GRID_OFFSET_X, GRID_OFFSET_Y + y * GRID_SIZE),
+                             (GRID_OFFSET_X + GRID_WIDTH * GRID_SIZE, GRID_OFFSET_Y + y * GRID_SIZE))
+
+        # Заполненные клетки
+        for y in range(GRID_HEIGHT):
+            for x in range(GRID_WIDTH):
+                if self.grid.cells[y][x]:
+                    pygame.draw.rect(self.screen, self.grid.cells[y][x],
+                                     (GRID_OFFSET_X + x * GRID_SIZE + 1,
+                                      GRID_OFFSET_Y + y * GRID_SIZE + 1,
+                                      GRID_SIZE - 2, GRID_SIZE - 2))
+
+    def draw_tetromino(self, tetromino):
+        """Отрисовывает фигуру"""
+        for x, y in tetromino.get_cells():
+            if y >= 0:  # Рисуем только видимые клетки
+                pygame.draw.rect(self.screen, tetromino.color,
+                                 (GRID_OFFSET_X + x * GRID_SIZE + 1,
+                                  GRID_OFFSET_Y + y * GRID_SIZE + 1,
+                                  GRID_SIZE - 2, GRID_SIZE - 2))
+
+    def draw_next_tetromino(self):
+        """Отрисовывает следующую фигуру в боковой панели"""
+        next_x = GRID_OFFSET_X + GRID_WIDTH * GRID_SIZE + 50
+        next_y = GRID_OFFSET_Y + 100
+
+        # Заголовок
+        text = self.font.render("Следующая:", True, WHITE)
+        self.screen.blit(text, (next_x, next_y - 40))
+
+        # Рисуем фигуру
+        for x, y in self.next_tetromino.get_cells():
+            pygame.draw.rect(self.screen, self.next_tetromino.color,
+                             (next_x + x * GRID_SIZE,
+                              next_y + y * GRID_SIZE,
+                              GRID_SIZE - 2, GRID_SIZE - 2))
+
+    def draw_ui(self):
+        """Отрисовывает пользовательский интерфейс"""
+        sidebar_x = GRID_OFFSET_X + GRID_WIDTH * GRID_SIZE + 20
+
+        # Счет
+        score_text = self.font.render(f"Счет: {self.score}", True, WHITE)
+        self.screen.blit(score_text, (sidebar_x, GRID_OFFSET_Y + 200))
+
+        # Уровень
+        level_text = self.font.render(f"Уровень: {self.level}", True, WHITE)
+        self.screen.blit(level_text, (sidebar_x, GRID_OFFSET_Y + 250))
+
+        # Линии
+        lines_text = self.font.render(f"Линии: {self.lines_cleared}", True, WHITE)
+        self.screen.blit(lines_text, (sidebar_x, GRID_OFFSET_Y + 300))
+
+        # Сложность
+        difficulty_text = self.font.render(f"Сложность: {self.difficulty}", True, WHITE)
+        self.screen.blit(difficulty_text, (sidebar_x, GRID_OFFSET_Y + 350))
+
+        # Управление
+        controls_y = GRID_OFFSET_Y + 450
+        controls = [
+            "Управление:",
+            "← → - Движение",
+            "↑ - Поворот",
+            "↓ - Ускорить",
+            "Пробел - Сбросить",
+            "P - Пауза",
+            "R - Рестарт",
+            "ESC - В меню"
+        ]
+
+        for i, text in enumerate(controls):
+            control_text = self.small_font.render(text, True, WHITE)
+            self.screen.blit(control_text, (sidebar_x, controls_y + i * 25))
+
+    def draw_centered_text(self, text, size, color, offset_y=0):
+        """Рисует текст по центру экрана"""
+        font = pygame.font.Font(None, size)
+        text_surface = font.render(text, True, color)
+        text_rect = text_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + offset_y))
+        self.screen.blit(text_surface, text_rect)
+
+    def run(self):
+        """Главный игровой цикл"""
+        while True:
+            # Обработка событий в зависимости от состояния
+            if self.state == "menu":
+                self.handle_menu_events()
+            elif self.state == "difficulty":
+                self.handle_difficulty_events()
+            elif self.state == "playing":
+                self.handle_game_events()
+
+            # Обновление игровой логики
+            self.update()
+
+            # Отрисовка в зависимости от состояния
+            if self.state == "menu":
+                self.draw_menu()
+            elif self.state == "difficulty":
+                self.draw_difficulty_menu()
+            elif self.state == "playing":
+                self.draw_game()
+
+            pygame.display.flip()
+            self.clock.tick(60)
+
+
+# Запуск игры
+if __name__ == "__main__":
+    game = Game()
+    game.run()
